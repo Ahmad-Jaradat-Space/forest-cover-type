@@ -9,6 +9,24 @@ from sklearn.metrics import confusion_matrix
 PALETTE = sns.color_palette("Set2", 7)
 ACCENT = "#2c5f8d"
 WARN = "#c44e52"
+CONTEXT = "#7f7f7f"
+
+
+def caption(fig, text):
+    """One-line takeaway caption under a figure."""
+    fig.text(0.5, -0.04, text, ha="center", va="top",
+             fontsize=9, color="#555", style="italic", wrap=True)
+
+
+def annotate_point(ax, x, y, text, dx=20, dy=20):
+    """Arrow + label pointing at (x, y) on `ax`."""
+    ax.annotate(
+        text, xy=(x, y), xytext=(dx, dy), textcoords="offset points",
+        fontsize=9, color="#333",
+        arrowprops=dict(arrowstyle="->", color="#555", lw=0.8),
+        bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                  ec="#bbb", lw=0.6, alpha=0.9),
+    )
 
 
 def apply_style():
