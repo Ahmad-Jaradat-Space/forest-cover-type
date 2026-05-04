@@ -2,16 +2,19 @@
 
 I just finished Andrew Ng's Machine Learning Specialization on Coursera and wanted a place to actually use what I learned, end to end, on real data instead of the toy assignments. This is the first of two capstones I built for that.
 
-The dataset is UCI's Covertype: 581k rows of cartographic and soil variables describing 30x30m patches of US forest, each labelled with one of seven dominant tree species. The task is to predict the cover type from the features.
+The dataset is UCI's Covertype: 581k rows of cartographic and soil variables describing 30x30m patches of US forest, each labelled with one of seven dominant tree species. The question I'm chasing is not "what's the best model on Covertype" — it's how much of forest cover type is solvable from cartography alone, and where does that approach hit its ceiling.
 
-In one notebook I compare:
+## How the notebook is laid out
 
-- logistic regression I wrote from scratch in numpy
-- the same in sklearn
-- a softmax neural net I wrote from scratch in numpy
-- the same network in Keras
-- decision tree, random forest, and histogram gradient boosting
-- PCA and K-means on the same features, as a sanity check on what unsupervised methods see in the data
+The notebook reads as a short paper with five sections, each carrying the actual narrative beats inside:
+
+1. **Introduction** — the problem and why anyone would care.
+2. **Data** — class balance, feature distributions, correlations, and the explicit modelling hypothesis these observations support.
+3. **Methods** — three model families fit in increasing capacity: logistic regression (from scratch in numpy and with sklearn), a one-hidden-layer neural net (from scratch and re-implemented in Keras as a cross-check), then tree ensembles (decision tree, random forest, histogram gradient boosting).
+4. **Results** — learning curves and bias/variance diagnosis, confusion structure, unsupervised cross-checks (PCA, K-means), and the final test-set comparison.
+5. **Conclusion** — the answer to the original question and where this would and wouldn't deploy.
+
+Every plot is read out loud: a one-line setup before the cell, a finding-style title on the figure itself, and a 2–4 sentence takeaway after — *what to look at, what it means, what it indicates next.*
 
 ## Running it
 
@@ -24,7 +27,7 @@ pip install -r requirements.txt
 jupyter notebook notebook.ipynb
 ```
 
-The first cell of the notebook downloads the data (~11 MB gzipped) into `data/` if it isn't there yet. The `data/` folder is gitignored.
+The first cell of the notebook downloads the data (~11 MB gzipped) into `data/` if it isn't there yet. The `data/` folder is gitignored. The `notebook.ipynb` in this repo is already executed, so GitHub renders all outputs and plots inline — you can read it through without running anything.
 
 ## What's where
 
