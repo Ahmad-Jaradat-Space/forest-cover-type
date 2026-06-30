@@ -53,10 +53,9 @@ def load(seed=0, subsample=None):
     df = pd.read_csv(CSV, header=None, names=COLUMNS)
 
     if subsample is not None:
-        df = df.groupby("cover_type", group_keys=False).apply(
-            lambda g: g.sample(
-                n=int(subsample * len(g) / len(df)), random_state=seed
-            )
+        # stratified subsample that preserves class proportions
+        df = df.groupby("cover_type", group_keys=False).sample(
+            frac=subsample / len(df), random_state=seed
         )
 
     X = df.drop(columns="cover_type").values.astype(np.float32)
@@ -82,3 +81,21 @@ CLASS_NAMES = [
     "Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine",
     "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz",
 ]
+
+# The four Roosevelt National Forest wilderness areas the survey covers.
+# Each is a contiguous block of terrain, so they double as spatial folds:
+# holding one out tests generalisation to an unseen region rather than to
+# unseen-but-neighbouring patches.
+WILDERNESS_NAMES = [
+    "Rawah", "Neota", "Comanche Peak", "Cache la Poudre",
+]
+
+
+def wilderness_group(X):
+    """Return the wilderness-area index (0..3) for each row.
+
+    Columns 10:14 of the design matrix are the four one-hot wilderness
+    indicators; their argmax is the area label. Survives standardisation
+    because only the first 10 (continuous) columns are scaled.
+    """
+    return X[:, 10:14].argmax(axis=1)

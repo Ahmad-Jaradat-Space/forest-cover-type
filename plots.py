@@ -463,3 +463,191 @@ def model_comparison(df, ax=None):
                  color=INK)
     ax.legend(loc="lower right")
     return ax
+
+
+# ------------------------------------------------------------------
+# Ridgeline (joyplot) — feature partition by class
+# ------------------------------------------------------------------
+def ridgeline(x, y, class_names, feat_label="Elevation (m)",
+              title="", ax=None, overlap=1.15):
+    """Stacked per-class densities, ordered by median.
+
+    The most legible way to show a feature carving classes apart: read
+    straight off which band of the axis belongs to which class. `x` is the
+    raw feature (e.g. metres, not standardised) so the axis stays physical."""
+    from scipy.stats import gaussian_kde
+    classes = np.unique(y)
+    order = sorted(classes, key=lambda c: np.median(x[y == c]))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(11, 0.78 * len(order) + 1.6))
+    lo, hi = np.percentile(x, 0.5), np.percentile(x, 99.5)
+    grid = np.linspace(lo, hi, 400)
+    rng = np.random.default_rng(0)
+    dens = {}
+    for c in order:
+        sub = x[y == c]
+        if len(sub) > 6000:
+            sub = rng.choice(sub, 6000, replace=False)
+        dens[c] = gaussian_kde(sub)(grid)
+    peak = max(d.max() for d in dens.values())
+    scale = overlap / peak
+    for i, c in enumerate(order):
+        base = i
+        d = dens[c] * scale
+        color = PALETTE[c] if c < len(PALETTE) else MUTED
+        ax.fill_between(grid, base, base + d, color=color, alpha=0.82,
+                        zorder=len(order) - i, lw=0)
+        ax.plot(grid, base + d, color=PAPER, lw=0.9, zorder=len(order) - i)
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels([class_names[c] for c in order])
+    ax.set_ylim(-0.3, len(order) + overlap)
+    ax.set_xlabel(feat_label)
+    ax.spines["left"].set_visible(False)
+    ax.grid(False, axis="y")
+    if title:
+        ax.set_title(title, color=INK)
+    return ax
+
+
+# ------------------------------------------------------------------
+# Spatial CV — random split vs leave-one-region-out
+# ------------------------------------------------------------------
+def cv_gap_dumbbell(metrics, title="", ax=None):
+    """Dumbbell: each metric's random-split value vs its leave-one-region-out
+    value, with the optimism gap labelled between them. `metrics` is a list of
+    (name, random_value, spatial_value)."""
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9, 1.4 + 0.95 * len(metrics)))
+    for i, (name, r, s) in enumerate(metrics):
+        ax.plot([s, r], [i, i], color="#C7CDD4", lw=2.5, zorder=1)
+        ax.scatter([r], [i], color=PRIMARY, s=130, zorder=3,
+                   label="Random 70/15/15 split" if i == 0 else None,
+                   edgecolor=PAPER, lw=1.2)
+        ax.scatter([s], [i], color=WARN, s=130, zorder=3,
+                   label="Leave-one-region-out" if i == 0 else None,
+                   edgecolor=PAPER, lw=1.2)
+        ax.annotate(f"{r:.2f}", (r, i), textcoords="offset points",
+                    xytext=(8, 9), fontsize=9.5, color=PRIMARY, fontweight="bold")
+        ax.annotate(f"{s:.2f}", (s, i), textcoords="offset points",
+                    xytext=(-8, 9), fontsize=9.5, color=WARN,
+                    fontweight="bold", ha="right")
+        ax.annotate(f"optimism −{r - s:.2f}", ((r + s) / 2, i),
+                    textcoords="offset points", xytext=(0, -16),
+                    fontsize=8.5, color=MUTED, ha="center", style="italic")
+    ax.set_yticks(range(len(metrics)))
+    ax.set_yticklabels([m[0] for m in metrics])
+    ax.set_ylim(-0.6, len(metrics) - 0.4)
+    ax.set_xlim(0, 1.05)
+    ax.set_xlabel("Score")
+    ax.legend(loc="lower left", ncol=2)
+    if title:
+        ax.set_title(title, color=INK)
+    return ax
+
+
+# ------------------------------------------------------------------
+# Calibration / reliability
+# ------------------------------------------------------------------
+def reliability_diagram(y_true, proba, title="Reliability", ax=None, n_bins=12):
+    """Reliability curve with the calibration gap shaded and ECE annotated.
+    A faint confidence histogram along the bottom shows where the mass lives."""
+    conf = proba.max(axis=1)
+    pred = proba.argmax(axis=1)
+    correct = (pred == y_true).astype(float)
+    edges = np.linspace(0, 1, n_bins + 1)
+    idx = np.clip(np.digitize(conf, edges) - 1, 0, n_bins - 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+    acc = np.full(n_bins, np.nan)
+    cnt = np.zeros(n_bins)
+    mean_conf = np.full(n_bins, np.nan)
+    for b in range(n_bins):
+        m = idx == b
+        cnt[b] = m.sum()
+        if m.sum():
+            acc[b] = correct[m].mean()
+            mean_conf[b] = conf[m].mean()
+    ece = np.nansum(cnt * np.abs(acc - mean_conf)) / cnt.sum()
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6.4, 6))
+    ax.plot([0, 1], [0, 1], "--", color=MUTED, lw=1.3,
+            label="Perfect calibration")
+    good = ~np.isnan(acc)
+    # shaded gap between observed accuracy and the diagonal
+    ax.fill_between(centers[good], acc[good], centers[good],
+                    color=WARN, alpha=0.18, label="Calibration gap")
+    ax.plot(centers[good], acc[good], "-o", color=PRIMARY, lw=2,
+            ms=6, label="Observed accuracy")
+    # confidence histogram along the bottom (scaled into [0, 0.18])
+    h = cnt / cnt.max() * 0.16
+    ax.bar(centers, h, width=1 / n_bins * 0.9, bottom=0,
+           color=MUTED, alpha=0.25, zorder=0)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Predicted confidence")
+    ax.set_ylabel("Observed accuracy")
+    ax.set_title(f"{title}   (ECE = {ece:.3f})", color=INK)
+    ax.legend(loc="upper left")
+    return ax, ece
+
+
+# ------------------------------------------------------------------
+# Bootstrap-CI forest plot for a metric
+# ------------------------------------------------------------------
+def metric_forest(rows, title="", xlabel="Macro-F1 (95% bootstrap CI)", ax=None):
+    """Caterpillar/forest plot: (label, point, lo, hi) per model, best on top."""
+    rows = sorted(rows, key=lambda r: r[1])
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9, 0.6 * len(rows) + 1.2))
+    for i, (label, p, lo, hi) in enumerate(rows):
+        ax.plot([lo, hi], [i, i], color="#C7CDD4", lw=3,
+                solid_capstyle="round", zorder=1)
+        ax.scatter([p], [i], color=PRIMARY, s=95, zorder=3,
+                   edgecolor=PAPER, lw=1.0)
+        ax.text(hi + 0.006, i, f"{p:.3f}  [{lo:.3f}, {hi:.3f}]",
+                va="center", fontsize=8.8, color=INK)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([r[0] for r in rows])
+    ax.set_ylim(-0.6, len(rows) - 0.4)
+    ax.set_xlabel(xlabel)
+    ax.set_xlim(right=min(1.0, max(r[3] for r in rows) + 0.16))
+    if title:
+        ax.set_title(title, color=INK)
+    return ax
+
+
+# ------------------------------------------------------------------
+# Predictive uncertainty
+# ------------------------------------------------------------------
+def entropy_by_correctness(y_true, proba, title="", ax=None):
+    """Predictive-entropy density split by whether the prediction was right.
+    If errors sit at visibly higher entropy, the model's own uncertainty is a
+    usable triage signal — route the high-entropy tail to a human reviewer."""
+    from scipy.stats import gaussian_kde
+    eps = 1e-12
+    ent = -(proba * np.log(proba + eps)).sum(axis=1)
+    pred = proba.argmax(axis=1)
+    correct = pred == y_true
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    grid = np.linspace(0, max(ent.max(), 1e-3), 300)
+    for mask, color, label in [(correct, GOOD, "Correct predictions"),
+                               (~correct, WARN, "Errors")]:
+        sub = ent[mask]
+        if len(sub) < 5:
+            continue
+        if len(sub) > 8000:
+            sub = np.random.default_rng(0).choice(sub, 8000, replace=False)
+        d = gaussian_kde(sub)(grid)
+        ax.fill_between(grid, 0, d, color=color, alpha=0.30)
+        ax.plot(grid, d, color=color, lw=1.9, label=label)
+    med_c = np.median(ent[correct])
+    med_e = np.median(ent[~correct])
+    ax.axvline(med_c, color=GOOD, ls=":", lw=1.2)
+    ax.axvline(med_e, color=WARN, ls=":", lw=1.2)
+    ax.set_xlabel("Predictive entropy (nats)")
+    ax.set_ylabel("Density")
+    ax.set_title(title or "Errors carry higher entropy — uncertainty is a usable triage signal",
+                 color=INK)
+    ax.legend(loc="upper right")
+    return ax, (med_c, med_e)

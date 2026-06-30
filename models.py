@@ -1,7 +1,15 @@
-"""From-scratch numpy implementations.
+"""From-scratch numpy implementations, plus a PyTorch cross-check.
 
-Two models: multinomial logistic regression (softmax) and a one-hidden-layer
-neural net with ReLU + softmax. Both use mini-batch SGD with L2.
+Three models:
+  * multinomial logistic regression (softmax) — numpy,
+  * a one-hidden-layer ReLU net — numpy (manual forward/backward),
+  * the same one-hidden-layer net in PyTorch (`TorchMLP`).
+
+The numpy nets exist to prove the math is understood end to end; the PyTorch
+version is the production-grade re-implementation we actually reach for, and
+overlaying their loss curves is the gradient check. All use mini-batch SGD
+with L2. A small `spatial_cv` helper runs grouped (leave-one-region-out)
+cross-validation for any sklearn-style estimator.
 """
 
 import numpy as np
@@ -137,3 +145,135 @@ class SoftmaxNN:
 
     def predict(self, X):
         return self._forward(X).argmax(axis=1)
+
+
+# ----------------------------------------------------------------------
+# PyTorch re-implementation of the one-hidden-layer net
+# ----------------------------------------------------------------------
+class TorchMLP:
+    """The same architecture as `SoftmaxNN`, written in PyTorch.
+
+    Kept deliberately faithful — He-initialised Linear → ReLU → Linear,
+    plain SGD with L2 (``weight_decay``), mini-batches — so that its loss
+    curve sits on top of the from-scratch numpy net's. That overlay is the
+    gradient check: if my hand-derived backward pass were wrong, the two
+    curves would diverge. Exposes the same sklearn-flavoured surface
+    (``fit`` / ``predict`` / ``predict_proba`` / ``history``) as the numpy
+    models so the notebook can treat all three interchangeably.
+
+    Runs on Apple-Silicon MPS or CUDA when available, otherwise CPU.
+    """
+
+    def __init__(self, n_classes, hidden=128, lr=0.05, l2=1e-4,
+                 epochs=25, batch=512, seed=0, device=None):
+        self.k = n_classes
+        self.hidden = hidden
+        self.lr = lr
+        self.l2 = l2
+        self.epochs = epochs
+        self.batch = batch
+        self.seed = seed
+        self.device = device
+        self.history = []
+        self.net = None
+
+    def _resolve_device(self):
+        import torch
+        if self.device is not None:
+            return torch.device(self.device)
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+
+    def fit(self, X, y, X_val=None, y_val=None):
+        import torch
+        from torch import nn
+
+        torch.manual_seed(self.seed)
+        dev = self._resolve_device()
+        d = X.shape[1]
+
+        self.net = nn.Sequential(
+            nn.Linear(d, self.hidden),
+            nn.ReLU(),
+            nn.Linear(self.hidden, self.k),
+        ).to(dev)
+        # He / Kaiming init for the ReLU layer, matching the numpy net.
+        for layer in self.net:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")
+                nn.init.zeros_(layer.bias)
+
+        opt = torch.optim.SGD(self.net.parameters(), lr=self.lr,
+                              weight_decay=self.l2)
+        loss_fn = nn.CrossEntropyLoss()
+
+        Xt = torch.as_tensor(X, dtype=torch.float32, device=dev)
+        yt = torch.as_tensor(y, dtype=torch.long, device=dev)
+        if X_val is not None:
+            Xvt = torch.as_tensor(X_val, dtype=torch.float32, device=dev)
+            yvt = torch.as_tensor(y_val, dtype=torch.long, device=dev)
+
+        n = len(Xt)
+        gen = torch.Generator().manual_seed(self.seed)
+        for epoch in range(self.epochs):
+            self.net.train()
+            perm = torch.randperm(n, generator=gen).to(dev)
+            for start in range(0, n, self.batch):
+                idx = perm[start:start + self.batch]
+                opt.zero_grad()
+                loss = loss_fn(self.net(Xt[idx]), yt[idx])
+                loss.backward()
+                opt.step()
+
+            self.net.eval()
+            with torch.no_grad():
+                entry = {"epoch": epoch,
+                         "train_loss": float(loss_fn(self.net(Xt), yt))}
+                if X_val is not None:
+                    logits_v = self.net(Xvt)
+                    entry["val_loss"] = float(loss_fn(logits_v, yvt))
+                    entry["val_acc"] = float(
+                        (logits_v.argmax(1) == yvt).float().mean())
+                self.history.append(entry)
+        return self
+
+    def predict_proba(self, X):
+        import torch
+        dev = next(self.net.parameters()).device
+        self.net.eval()
+        with torch.no_grad():
+            logits = self.net(torch.as_tensor(X, dtype=torch.float32, device=dev))
+            return torch.softmax(logits, dim=1).cpu().numpy()
+
+    def predict(self, X):
+        return self.predict_proba(X).argmax(axis=1)
+
+
+# ----------------------------------------------------------------------
+# Grouped (spatial) cross-validation
+# ----------------------------------------------------------------------
+def spatial_cv(make_estimator, X, y, groups, scorers):
+    """Leave-one-group-out cross-validation.
+
+    For each unique value of ``groups`` we train on every *other* group and
+    score on the held-out one — so no row in a test fold has a spatial
+    neighbour leaking in from the training fold. ``make_estimator`` is a
+    zero-arg factory returning a fresh, unfitted estimator; ``scorers`` is a
+    ``{name: fn(y_true, y_pred)}`` dict. Returns a list of per-fold result
+    dicts (one per held-out group).
+    """
+    rows = []
+    for g in np.unique(groups):
+        test = groups == g
+        train = ~test
+        est = make_estimator()
+        est.fit(X[train], y[train])
+        pred = est.predict(X[test])
+        row = {"held_out_group": int(g), "n_test": int(test.sum())}
+        for name, fn in scorers.items():
+            row[name] = float(fn(y[test], pred))
+        rows.append(row)
+    return rows
