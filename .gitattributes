@@ -1,0 +1,11 @@
+# Normalise line endings across platforms
+* text=auto eol=lf
+
+# Binary assets — never normalise or diff as text
+*.png binary
+*.jpg binary
+*.tif binary
+
+# Notebooks are committed already executed (figures render on GitHub).
+# Diff them with nbdiff if you have it; the default diff is noisy.
+*.ipynb -diff
